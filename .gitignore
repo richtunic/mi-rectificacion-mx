@@ -1,0 +1,10 @@
+/target/
+/.local/
+*.db
+*.db-shm
+*.db-wal
+.DS_Store
+.idea/
+.vscode/
+/tmp/pdfs/
+/output/

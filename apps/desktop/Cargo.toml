@@ -1,0 +1,27 @@
+[package]
+name = "desktop"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+chrono.workspace = true
+dioxus.workspace = true
+mi-rectificacion-application = { path = "../../crates/application" }
+mi-rectificacion-domain = { path = "../../crates/domain" }
+mi-rectificacion-documents = { path = "../../crates/documents" }
+mi-rectificacion-integrations = { path = "../../crates/integrations" }
+mi-rectificacion-storage = { path = "../../crates/storage" }
+rfd.workspace = true
+open.workspace = true
+rust_decimal.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSApplication", "NSImage", "NSResponder"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["NSData"] }

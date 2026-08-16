@@ -1,0 +1,11 @@
+[package]
+name = "mi-rectificacion-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+mi-rectificacion-domain = { path = "../domain" }
+thiserror.workspace = true
+uuid.workspace = true

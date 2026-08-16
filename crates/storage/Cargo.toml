@@ -1,0 +1,21 @@
+[package]
+name = "mi-rectificacion-storage"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+directories.workspace = true
+infer.workspace = true
+mi-rectificacion-application = { path = "../application" }
+mi-rectificacion-domain = { path = "../domain" }
+mi-rectificacion-security = { path = "../security" }
+rusqlite.workspace = true
+rust_decimal.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+uuid.workspace = true
