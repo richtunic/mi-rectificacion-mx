@@ -23,7 +23,7 @@ jobs:
           - label: Windows (64 bits)
             os: windows-latest
             platform: windows
-            package_type: nsis
+            package_type: msi
             artifact: mi-rectificacion-mx-windows-x86_64
             dx_asset: dx-x86_64-pc-windows-msvc.zip
             dx_sha256: 45eb4f87b7f86fdba8508ee7e0ef1f9e13cf8f2ffcc6a2d5858d0e8ea7dd1531
