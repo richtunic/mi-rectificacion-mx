@@ -32,6 +32,8 @@ const ONBOARDING_MIGRATION: &str = include_str!("../migrations/0008_onboarding.s
 const ARCHIVED_CASES_MIGRATION: &str = include_str!("../migrations/0009_archived_cases.sql");
 const CAPTURE_PROGRESS_MIGRATION: &str = include_str!("../migrations/0010_capture_progress.sql");
 const CUSTOMS_VALUATION_MIGRATION: &str = include_str!("../migrations/0011_customs_valuation.sql");
+const CASE_DOCUMENT_NOTES_MIGRATION: &str =
+    include_str!("../migrations/0012_case_document_notes.sql");
 const DATABASE_FILENAME: &str = "rectifications.db";
 
 fn app_project_dirs() -> Result<ProjectDirs> {
@@ -77,7 +79,7 @@ impl SqliteCaseRepository {
     fn migrate(&self) -> Result<()> {
         self.connection()?
             .execute_batch(&format!(
-                "{INITIAL_MIGRATION}\n{EVIDENCE_MIGRATION}\n{PRODUCTS_MIGRATION}\n{TRACKING_MIGRATION}\n{TRACKING_PARSER_FIX_MIGRATION}\n{APPLICANT_PROFILE_MIGRATION}\n{EMAIL_DRAFTS_MIGRATION}\n{ONBOARDING_MIGRATION}\n{ARCHIVED_CASES_MIGRATION}\n{CAPTURE_PROGRESS_MIGRATION}\n{CUSTOMS_VALUATION_MIGRATION}"
+                "{INITIAL_MIGRATION}\n{EVIDENCE_MIGRATION}\n{PRODUCTS_MIGRATION}\n{TRACKING_MIGRATION}\n{TRACKING_PARSER_FIX_MIGRATION}\n{APPLICANT_PROFILE_MIGRATION}\n{EMAIL_DRAFTS_MIGRATION}\n{ONBOARDING_MIGRATION}\n{ARCHIVED_CASES_MIGRATION}\n{CAPTURE_PROGRESS_MIGRATION}\n{CUSTOMS_VALUATION_MIGRATION}\n{CASE_DOCUMENT_NOTES_MIGRATION}"
             ))
             .context("Fallaron las migraciones de SQLite")
     }
@@ -201,6 +203,10 @@ impl CaseDataStore {
         Self { repository }
     }
 
+    pub fn load_case(&self, case_id: Uuid) -> Result<RectificationCase> {
+        self.repository.find(case_id)
+    }
+
     pub fn load_applicant_profile(&self) -> Result<ApplicantProfile> {
         self.repository
             .connection()?
@@ -286,6 +292,46 @@ impl CaseDataStore {
                 value_mxn.normalize().to_string(),
                 Utc::now().to_rfc3339(),
             ],
+        )?;
+        Ok(())
+    }
+
+    pub fn save_customs_form_number(&self, case_id: Uuid, value: &str) -> Result<()> {
+        self.repository.find(case_id)?;
+        let normalized = value.split_whitespace().collect::<Vec<_>>().join(" ");
+        let normalized = (!normalized.is_empty()).then_some(normalized);
+        self.repository.connection()?.execute(
+            "UPDATE rectification_cases
+             SET customs_form_number = ?1, updated_at = ?2
+             WHERE id = ?3",
+            params![normalized, Utc::now().to_rfc3339(), case_id.to_string(),],
+        )?;
+        Ok(())
+    }
+
+    pub fn load_request_notes(&self, case_id: Uuid) -> Result<String> {
+        self.repository.find(case_id)?;
+        Ok(self
+            .repository
+            .connection()?
+            .query_row(
+                "SELECT request_notes FROM case_document_notes WHERE case_id = ?1",
+                [case_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?
+            .unwrap_or_default())
+    }
+
+    pub fn save_request_notes(&self, case_id: Uuid, value: &str) -> Result<()> {
+        self.repository.find(case_id)?;
+        self.repository.connection()?.execute(
+            "INSERT INTO case_document_notes (case_id, request_notes, updated_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(case_id) DO UPDATE SET
+                request_notes = excluded.request_notes,
+                updated_at = excluded.updated_at",
+            params![case_id.to_string(), value, Utc::now().to_rfc3339()],
         )?;
         Ok(())
     }
@@ -1651,7 +1697,17 @@ mod tests {
                 .join(document.encrypted_relative_path)
                 .exists()
         );
+        let replacement = vault
+            .import_evidence(
+                case.id,
+                EvidenceKind::Product,
+                Some("Factura reemplazada".to_owned()),
+                &source,
+            )
+            .unwrap();
+        assert_eq!(vault.list_evidence(case.id).unwrap().len(), 2);
         vault.remove_evidence(&second).unwrap();
+        vault.remove_evidence(&replacement).unwrap();
         assert!(vault.list_evidence(case.id).unwrap().is_empty());
         let _ = fs::remove_dir_all(root);
     }
@@ -1953,6 +2009,62 @@ mod tests {
         let email_documents = store.automatic_email_documents_root(case.id).unwrap();
         assert!(email_documents.is_dir());
         assert!(email_documents.starts_with(&root));
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn updates_and_clears_the_customs_form_number_for_an_existing_case() {
+        let root = test_dir("customs-form-number");
+        let repository = SqliteCaseRepository::open(root.join("data.db")).unwrap();
+        let case = RectificationCase::new("RR123456789MX", None, None).unwrap();
+        repository.insert(&case).unwrap();
+        let store = CaseDataStore::open(repository.clone());
+
+        store
+            .save_customs_form_number(case.id, "  BOLETA   12345  ")
+            .unwrap();
+        let saved = repository
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == case.id)
+            .unwrap();
+        assert_eq!(saved.customs_form_number.as_deref(), Some("BOLETA 12345"));
+        assert!(saved.updated_at >= case.updated_at);
+
+        store.save_customs_form_number(case.id, "   ").unwrap();
+        let cleared = repository
+            .list()
+            .unwrap()
+            .into_iter()
+            .find(|item| item.id == case.id)
+            .unwrap();
+        assert_eq!(cleared.customs_form_number, None);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn persists_and_clears_request_notes_for_each_case() {
+        let root = test_dir("request-notes");
+        let repository = SqliteCaseRepository::open(root.join("data.db")).unwrap();
+        let case = RectificationCase::new("RR123456789MX", None, None).unwrap();
+        repository.insert(&case).unwrap();
+        let store = CaseDataStore::open(repository);
+
+        assert_eq!(store.load_request_notes(case.id).unwrap(), "");
+        store
+            .save_request_notes(
+                case.id,
+                "El contenido corresponde a una compra de uso personal.\nSe adjunta comprobante.",
+            )
+            .unwrap();
+        assert_eq!(
+            store.load_request_notes(case.id).unwrap(),
+            "El contenido corresponde a una compra de uso personal.\nSe adjunta comprobante."
+        );
+
+        store.save_request_notes(case.id, "").unwrap();
+        assert_eq!(store.load_request_notes(case.id).unwrap(), "");
         let _ = fs::remove_dir_all(root);
     }
 

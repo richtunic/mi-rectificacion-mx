@@ -7,8 +7,8 @@ use mi_rectificacion_domain::{
     calculate_customs_overvaluation,
 };
 use printpdf::{
-    BuiltinFont, Color, FontId, Mm, Op, ParsedFont, PdfDocument, PdfPage, PdfParseOptions,
-    PdfSaveOptions, PdfToSvgOptions, Point, Pt, RawImage, Rgb, TextItem, XObjectTransform,
+    BuiltinFont, Color, FontId, Mm, Op, ParsedFont, PdfDocument, PdfPage, PdfSaveOptions, Point,
+    Pt, RawImage, Rgb, TextItem, XObjectTransform,
 };
 use rust_decimal::{Decimal, RoundingStrategy};
 use serde::Serialize;
@@ -466,7 +466,7 @@ fn build_request_pdf(
                 presumptive, assessment.total_mxn
             ),
             |comparison| format!(
-                "4. La boleta consigna ${:.2} M.N., es decir, una valuación ${:.2} M.N. superior al valor real acreditado, equivalente a un exceso de {:.2}%. Esta diferencia debe rectificarse con base en la evidencia aportada.",
+                "4. La boleta consigna ${:.2} M.N., es decir, una valuación ${:.2} M.N. superior al valor real acreditado, equivalente a un exceso de {:.2}%. Por tal motivo, respetuosamente solicito que esta diferencia sea revisada y, de estimarse procedente, se ajuste la valoración con base en la evidencia aportada.",
                 presumptive,
                 difference,
                 comparison.percentage_above_real_value
@@ -745,16 +745,45 @@ fn unicode_wrapped_text(
     y
 }
 
+#[derive(Debug, Clone, Copy)]
+struct ImagePlacement {
+    scale: f32,
+    x_pt: f32,
+    y_pt: f32,
+}
+
+fn fit_image_to_printable_area(
+    width_px: usize,
+    height_px: usize,
+    dpi: f32,
+    max_width_mm: f32,
+    max_height_mm: f32,
+    bottom_mm: f32,
+) -> ImagePlacement {
+    let width_pt = width_px as f32 * 72.0 / dpi;
+    let height_pt = height_px as f32 * 72.0 / dpi;
+    let max_width_pt = max_width_mm * 72.0 / 25.4;
+    let max_height_pt = max_height_mm * 72.0 / 25.4;
+    let scale = (max_width_pt / width_pt).min(max_height_pt / height_pt);
+    let rendered_width_pt = width_pt * scale;
+    let rendered_height_pt = height_pt * scale;
+
+    ImagePlacement {
+        scale,
+        x_pt: (210.0 * 72.0 / 25.4 - rendered_width_pt) / 2.0,
+        y_pt: bottom_mm * 72.0 / 25.4 + (max_height_pt - rendered_height_pt) / 2.0,
+    }
+}
+
 fn build_evidence_pdf(
     case: &RectificationCase,
     products: &[ProductLine],
     evidence: &[EvidenceAsset],
 ) -> Result<Vec<u8>> {
-    let mut document = PdfDocument::new("Dossier de pruebas y valoración");
+    let mut cover_document = PdfDocument::new("Dossier de pruebas y valoración");
     let unicode_font = ParsedFont::from_bytes(ROBOTO_MEDIUM, 0, &mut Vec::new())
         .expect("La fuente Unicode incluida debe ser válida");
-    let unicode_font_id = document.add_font(&unicode_font);
-    let mut pages = Vec::new();
+    let unicode_font_id = cover_document.add_font(&unicode_font);
     let mut cover = Vec::new();
     page_header(
         &mut cover,
@@ -816,12 +845,7 @@ fn build_evidence_pdf(
             index_y,
             8.0,
             &unicode_font_id,
-            &format!(
-                "{:02}. {} - {}",
-                index + 1,
-                asset.document.title,
-                asset.document.original_filename
-            ),
+            &format!("{:02}. {}", index + 1, asset.document.title),
         );
         index_y -= 6.5;
     }
@@ -835,42 +859,32 @@ fn build_evidence_pdf(
             &format!("y {} evidencias adicionales", evidence.len() - 7),
         );
     }
-    pages.push(PdfPage::new(Mm(210.0), Mm(297.0), cover));
+    let mut segments = vec![save_pdf(
+        &mut cover_document,
+        vec![PdfPage::new(Mm(210.0), Mm(297.0), cover)],
+    )];
 
     for (index, asset) in evidence.iter().enumerate() {
-        let mut ops = Vec::new();
-        let mut converted_pdf_pages = Vec::new();
-        page_header(
-            &mut ops,
-            &format!("EVIDENCIA {:02}", index + 1),
-            &case.tracking_number,
-            &unicode_font_id,
-        );
-        unicode_text(
-            &mut ops,
-            20.0,
-            250.0,
-            13.0,
-            &unicode_font_id,
-            &asset.document.title,
-        );
-        unicode_text(
-            &mut ops,
-            20.0,
-            242.0,
-            8.0,
-            &unicode_font_id,
-            &format!("Archivo: {}", asset.document.original_filename),
-        );
-        ascii_text(
-            &mut ops,
-            20.0,
-            236.0,
-            7.0,
-            BuiltinFont::Courier,
-            &format!("SHA-256: {}", asset.document.sha256),
-        );
         if asset.document.is_image() {
+            let mut image_document = PdfDocument::new(&format!("Evidencia {:02}", index + 1));
+            let image_font = ParsedFont::from_bytes(ROBOTO_MEDIUM, 0, &mut Vec::new())
+                .expect("La fuente Unicode incluida debe ser válida");
+            let image_font_id = image_document.add_font(&image_font);
+            let mut ops = Vec::new();
+            page_header(
+                &mut ops,
+                &format!("EVIDENCIA {:02}", index + 1),
+                &case.tracking_number,
+                &image_font_id,
+            );
+            unicode_text(
+                &mut ops,
+                20.0,
+                250.0,
+                13.0,
+                &image_font_id,
+                &asset.document.title,
+            );
             let image =
                 RawImage::decode_from_bytes(&asset.bytes, &mut Vec::new()).map_err(|error| {
                     anyhow::anyhow!(
@@ -878,123 +892,36 @@ fn build_evidence_pdf(
                         asset.document.original_filename
                     )
                 })?;
-            let width_pt = image.width as f32 * 72.0 / 300.0;
-            let height_pt = image.height as f32 * 72.0 / 300.0;
-            let max_width = 170.0 * 72.0 / 25.4;
-            let max_height = 190.0 * 72.0 / 25.4;
-            let scale = (max_width / width_pt).min(max_height / height_pt).min(1.0);
-            let rendered_width = width_pt * scale;
-            let rendered_height = height_pt * scale;
-            let x = (210.0 * 72.0 / 25.4 - rendered_width) / 2.0;
-            let y = 32.0 * 72.0 / 25.4 + (max_height - rendered_height) / 2.0;
-            let image_id = document.add_image(&image);
+            let placement =
+                fit_image_to_printable_area(image.width, image.height, 300.0, 180.0, 220.0, 20.0);
+            let image_id = image_document.add_image(&image);
             ops.push(Op::UseXobject {
                 id: image_id,
                 transform: XObjectTransform {
-                    translate_x: Some(Pt(x)),
-                    translate_y: Some(Pt(y)),
-                    scale_x: Some(scale),
-                    scale_y: Some(scale),
+                    translate_x: Some(Pt(placement.x_pt)),
+                    translate_y: Some(Pt(placement.y_pt)),
+                    scale_x: Some(placement.scale),
+                    scale_y: Some(placement.scale),
                     dpi: Some(300.0),
                     ..Default::default()
                 },
             });
+            segments.push(save_pdf(
+                &mut image_document,
+                vec![PdfPage::new(Mm(210.0), Mm(297.0), ops)],
+            ));
         } else {
-            let source_pdf =
-                PdfDocument::parse(&asset.bytes, &PdfParseOptions::default(), &mut Vec::new())
-                    .map_err(|error| {
-                        anyhow::anyhow!(
-                            "No se pudo preparar {}: {error}",
-                            asset.document.original_filename
-                        )
-                    })?;
-            let page_count = source_pdf.pages.len();
-            let page_label = if page_count == 1 {
-                "página"
-            } else {
-                "páginas"
-            };
-            unicode_text(&mut ops, 73.0, 155.0, 34.0, &unicode_font_id, "PDF");
-            unicode_text(
-                &mut ops,
-                52.0,
-                137.0,
-                10.0,
-                &unicode_font_id,
-                &format!("Documento original de {page_count} {page_label}"),
-            );
-            unicode_wrapped_text(
-                &mut ops,
-                35.0,
-                122.0,
-                140.0,
-                8.5,
-                5.0,
-                &unicode_font_id,
-                "El archivo original verificado se incluye sin modificar dentro del ZIP del expediente. Esta hoja conserva su identidad y huella de integridad.",
-            );
-            for (source_index, source_page) in source_pdf.pages.iter().enumerate() {
-                let svg = source_page.to_svg(
-                    &source_pdf.resources,
-                    &PdfToSvgOptions::default(),
-                    &mut Vec::new(),
-                );
-                let mut options = resvg::usvg::Options::default();
-                options.fontdb_mut().load_system_fonts();
-                let tree = resvg::usvg::Tree::from_str(&svg, &options).map_err(|error| {
-                    anyhow::anyhow!(
-                        "No se pudo interpretar la página {} de {}: {error}",
-                        source_index + 1,
-                        asset.document.original_filename
-                    )
-                })?;
-                let size = tree.size().to_int_size();
-                let mut pixmap = tiny_skia::Pixmap::new(size.width() * 2, size.height() * 2)
-                    .context("La página PDF es demasiado grande para rasterizar")?;
-                resvg::render(
-                    &tree,
-                    tiny_skia::Transform::from_scale(2.0, 2.0),
-                    &mut pixmap.as_mut(),
-                );
-                let page_png = pixmap.encode_png()?;
-                let page_image =
-                    RawImage::decode_from_bytes(&page_png, &mut Vec::new()).map_err(|error| {
-                        anyhow::anyhow!("No se pudo codificar la página PDF: {error}")
-                    })?;
-                let image_id = document.add_image(&page_image);
-                let mut source_ops = Vec::new();
-                page_header(
-                    &mut source_ops,
-                    &format!(
-                        "EVIDENCIA {:02} - PÁGINA ORIGINAL {}",
-                        index + 1,
-                        source_index + 1
-                    ),
-                    &case.tracking_number,
-                    &unicode_font_id,
-                );
-                source_ops.push(Op::UseXobject {
-                    id: image_id,
-                    transform: XObjectTransform {
-                        translate_x: Some(Pt(56.0)),
-                        translate_y: Some(Pt(62.0)),
-                        scale_x: Some(0.81),
-                        scale_y: Some(0.81),
-                        dpi: Some(144.0),
-                        ..Default::default()
-                    },
-                });
-                converted_pdf_pages.push(PdfPage::new(Mm(210.0), Mm(297.0), source_ops));
-            }
+            LoDocument::load_mem(&asset.bytes).with_context(|| {
+                format!(
+                    "No se pudo incorporar el PDF original {}",
+                    asset.document.original_filename
+                )
+            })?;
+            segments.push(asset.bytes.clone());
         }
-        pages.push(PdfPage::new(Mm(210.0), Mm(297.0), ops));
-        pages.extend(converted_pdf_pages);
     }
-    let total = pages.len();
-    for (index, page) in pages.iter_mut().enumerate() {
-        page_footer(&mut page.ops, index + 1, total);
-    }
-    Ok(save_pdf(&mut document, pages))
+    let segment_refs = segments.iter().map(Vec::as_slice).collect::<Vec<_>>();
+    merge_pdf_documents(&segment_refs)
 }
 
 fn merge_pdf_documents(documents: &[&[u8]]) -> Result<Vec<u8>> {
@@ -1162,7 +1089,7 @@ fn build_request_docx(
                 presumptive, assessment.total_mxn
             ),
             |comparison| format!(
-                "La boleta consigna ${:.2} M.N., es decir, una valuación ${:.2} M.N. superior al valor real acreditado, equivalente a un exceso de {:.2}%. Esta diferencia debe rectificarse con base en la evidencia aportada.",
+                "La boleta consigna ${:.2} M.N., es decir, una valuación ${:.2} M.N. superior al valor real acreditado, equivalente a un exceso de {:.2}%. Por tal motivo, respetuosamente solicito que esta diferencia sea revisada y, de estimarse procedente, se ajuste la valoración con base en la evidencia aportada.",
                 presumptive,
                 difference,
                 comparison.percentage_above_real_value
@@ -1653,6 +1580,7 @@ mod tests {
     use super::*;
     use chrono::NaiveDate;
     use mi_rectificacion_domain::{EvidenceKind, ProductDraft};
+    use printpdf::PdfParseOptions;
     use uuid::Uuid;
 
     fn email_attachment(email: &str, filename: &str) -> Vec<u8> {
@@ -1705,6 +1633,30 @@ mod tests {
         )));
     }
 
+    #[test]
+    fn horizontal_evidence_uses_the_full_printable_width() {
+        let placement = fit_image_to_printable_area(1_200, 300, 300.0, 180.0, 205.0, 20.0);
+        let expected_width = 180.0 * 72.0 / 25.4;
+        let rendered_width = 1_200.0 * 72.0 / 300.0 * placement.scale;
+        let rendered_height = 300.0 * 72.0 / 300.0 * placement.scale;
+
+        assert!(placement.scale > 1.0);
+        assert!((rendered_width - expected_width).abs() < 0.1);
+        assert!(rendered_height < 205.0 * 72.0 / 25.4);
+    }
+
+    #[test]
+    fn vertical_evidence_uses_the_full_printable_height() {
+        let placement = fit_image_to_printable_area(900, 1_800, 300.0, 180.0, 205.0, 20.0);
+        let expected_height = 205.0 * 72.0 / 25.4;
+        let rendered_width = 900.0 * 72.0 / 300.0 * placement.scale;
+        let rendered_height = 1_800.0 * 72.0 / 300.0 * placement.scale;
+
+        assert!(placement.scale > 1.0);
+        assert!((rendered_height - expected_height).abs() < 0.1);
+        assert!(rendered_width < 180.0 * 72.0 / 25.4);
+    }
+
     fn test_product(case: &RectificationCase, total_mxn: Decimal) -> ProductLine {
         let draft = ProductDraft::new(
             "Producto de prueba",
@@ -1718,6 +1670,44 @@ mod tests {
         )
         .unwrap();
         ProductLine::new(case.id, draft, test_rate("MXN", Decimal::ONE)).unwrap()
+    }
+
+    fn test_invoice_pdf() -> Vec<u8> {
+        let mut document = PdfDocument::new("Factura PDF de prueba");
+        let mut ops = Vec::new();
+        ascii_text(
+            &mut ops,
+            7.0,
+            289.0,
+            10.0,
+            BuiltinFont::Helvetica,
+            "ESQUINA SUPERIOR IZQUIERDA",
+        );
+        ascii_text(
+            &mut ops,
+            132.0,
+            289.0,
+            10.0,
+            BuiltinFont::Helvetica,
+            "SUPERIOR DERECHA",
+        );
+        ascii_text(
+            &mut ops,
+            7.0,
+            7.0,
+            10.0,
+            BuiltinFont::Helvetica,
+            "ESQUINA INFERIOR IZQUIERDA",
+        );
+        ascii_text(
+            &mut ops,
+            132.0,
+            7.0,
+            10.0,
+            BuiltinFont::Helvetica,
+            "INFERIOR DERECHA",
+        );
+        save_pdf(&mut document, vec![PdfPage::new(Mm(210.0), Mm(297.0), ops)])
     }
 
     #[test]
@@ -1751,22 +1741,41 @@ mod tests {
         let products = [test_product(&case, Decimal::new(88711, 2))];
         let evidence_bytes =
             include_bytes!("../../../assets/mi-rectificacion-mx-logo.png").to_vec();
-        let evidence = [EvidenceAsset {
-            document: EvidenceDocument {
-                id: Uuid::new_v4(),
-                case_id: case.id,
-                kind: EvidenceKind::Transaction,
-                title: "Captura de transacción de prueba".to_owned(),
-                original_filename: "captura-transaccion.png".to_owned(),
-                content_type: "image/png".to_owned(),
-                size_bytes: evidence_bytes.len() as u64,
-                sha256: sha256_hex(&evidence_bytes),
-                encrypted_relative_path: "fixture".to_owned(),
-                order_index: 0,
-                created_at: Utc::now(),
+        let invoice_pdf = test_invoice_pdf();
+        let evidence = vec![
+            EvidenceAsset {
+                document: EvidenceDocument {
+                    id: Uuid::new_v4(),
+                    case_id: case.id,
+                    kind: EvidenceKind::Transaction,
+                    title: "Captura de transacción de prueba".to_owned(),
+                    original_filename: "captura-transaccion.png".to_owned(),
+                    content_type: "image/png".to_owned(),
+                    size_bytes: evidence_bytes.len() as u64,
+                    sha256: sha256_hex(&evidence_bytes),
+                    encrypted_relative_path: "fixture".to_owned(),
+                    order_index: 0,
+                    created_at: Utc::now(),
+                },
+                bytes: evidence_bytes.clone(),
             },
-            bytes: evidence_bytes.clone(),
-        }];
+            EvidenceAsset {
+                document: EvidenceDocument {
+                    id: Uuid::new_v4(),
+                    case_id: case.id,
+                    kind: EvidenceKind::Product,
+                    title: "Factura PDF completa".to_owned(),
+                    original_filename: "factura-prueba.pdf".to_owned(),
+                    content_type: "application/pdf".to_owned(),
+                    size_bytes: invoice_pdf.len() as u64,
+                    sha256: sha256_hex(&invoice_pdf),
+                    encrypted_relative_path: "fixture-pdf".to_owned(),
+                    order_index: 1,
+                    created_at: Utc::now(),
+                },
+                bytes: invoice_pdf,
+            },
+        ];
 
         let bundle = generate_bundle(&case, &applicant, &products, &evidence, &root).unwrap();
         let regenerated = generate_bundle(&case, &applicant, &products, &evidence, &root).unwrap();
@@ -1784,7 +1793,7 @@ mod tests {
             .unwrap()
             .pages
             .len(),
-            4
+            5
         );
         assert!(zip::ZipArchive::new(File::open(&standalone_docx).unwrap()).is_ok());
         let request = fs::read(&bundle.request_pdf).unwrap();
@@ -1816,12 +1825,61 @@ mod tests {
                 "P R E S E N T E",
             ]
         );
+        let request_text = parsed_request
+            .pages
+            .iter()
+            .flat_map(|page| page.ops.iter())
+            .filter_map(|operation| match operation {
+                Op::WriteText { items, .. } | Op::WriteTextBuiltinFont { items, .. } => {
+                    items.first()
+                }
+                _ => None,
+            })
+            .filter_map(|item| match item {
+                TextItem::Text(value) => Some(value.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(request_text.contains(
+            "respetuosamente solicito que esta diferencia sea revisada y, de estimarse procedente"
+        ));
+        assert!(!request_text.contains("Esta diferencia debe rectificarse"));
+        let parsed_dossier =
+            PdfDocument::parse(&dossier, &PdfParseOptions::default(), &mut Vec::new()).unwrap();
+        assert_eq!(parsed_dossier.pages.len(), 3);
+        let visible_dossier_text = parsed_dossier
+            .pages
+            .iter()
+            .flat_map(|page| page.ops.iter())
+            .filter_map(|operation| match operation {
+                Op::WriteText { items, .. } | Op::WriteTextBuiltinFont { items, .. } => {
+                    items.first()
+                }
+                _ => None,
+            })
+            .filter_map(|item| match item {
+                TextItem::Text(value) => Some(value.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join(" ");
+        assert!(visible_dossier_text.contains("EVIDENCIA 01"));
+        assert!(visible_dossier_text.contains("Captura de transacción de prueba"));
+        assert!(visible_dossier_text.contains("Factura PDF completa"));
+        assert!(visible_dossier_text.contains("ESQUINA SUPERIOR IZQUIERDA"));
+        assert!(visible_dossier_text.contains("ESQUINA INFERIOR IZQUIERDA"));
+        assert!(!visible_dossier_text.contains("captura-transaccion.png"));
+        assert!(!visible_dossier_text.contains("factura-prueba.pdf"));
+        assert!(!visible_dossier_text.contains("SHA-256"));
+        assert!(!visible_dossier_text.contains("cifrad"));
+        let source_invoice = LoDocument::load_mem(&evidence[1].bytes).unwrap();
+        let merged_dossier = LoDocument::load_mem(&dossier).unwrap();
+        let source_page = *source_invoice.get_pages().values().next().unwrap();
+        let merged_pdf_page = *merged_dossier.get_pages().values().nth(2).unwrap();
         assert_eq!(
-            PdfDocument::parse(&dossier, &PdfParseOptions::default(), &mut Vec::new())
-                .unwrap()
-                .pages
-                .len(),
-            2
+            merged_dossier.get_page_content(merged_pdf_page).unwrap(),
+            source_invoice.get_page_content(source_page).unwrap()
         );
         let manifest: serde_json::Value =
             serde_json::from_slice(&fs::read(&bundle.manifest).unwrap()).unwrap();
@@ -1833,7 +1891,7 @@ mod tests {
                 .unwrap()
                 .pages
                 .len(),
-            4
+            5
         );
         let mut editable = zip::ZipArchive::new(File::open(&bundle.request_docx).unwrap()).unwrap();
         let mut editable_xml = String::new();
@@ -1858,6 +1916,10 @@ mod tests {
             "equivalente a un exceso de {:.2}%",
             comparison.percentage_above_real_value
         )));
+        assert!(editable_xml.contains(
+            "respetuosamente solicito que esta diferencia sea revisada y, de estimarse procedente"
+        ));
+        assert!(!editable_xml.contains("Esta diferencia debe rectificarse"));
         let mut archive = zip::ZipArchive::new(File::open(&bundle.zip).unwrap()).unwrap();
         assert!(archive.by_name("01_solicitud_rectificacion.pdf").is_ok());
         assert!(archive.by_name("02_dossier_pruebas.pdf").is_ok());

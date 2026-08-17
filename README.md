@@ -143,7 +143,7 @@ cargo run -p mi-rectificacion-documents --example generate_sample -- output/pdf
 
 ## Calidad
 
-El workspace mantiene actualmente **36 pruebas automatizadas**. La integración continua ejecuta:
+El workspace mantiene actualmente **45 pruebas automatizadas**. La integración continua ejecuta:
 
 ```bash
 cargo fmt --all -- --check
@@ -153,7 +153,7 @@ cargo test --workspace
 
 ## Estado del proyecto
 
-`0.1.0-beta.1` es una versión beta funcional. Antes de considerarla estable faltan, entre otras tareas:
+`0.1.0-beta.2` es una versión beta funcional. Antes de considerarla estable faltan, entre otras tareas:
 
 - validación de empaquetado y firma en macOS, Windows y Linux;
 - pruebas con más formatos reales anonimizados de boleta;

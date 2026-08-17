@@ -17,7 +17,11 @@ mi-rectificacion-integrations = { path = "../../crates/integrations" }
 mi-rectificacion-storage = { path = "../../crates/storage" }
 rfd.workspace = true
 open.workspace = true
+reqwest.workspace = true
 rust_decimal.workspace = true
+semver.workspace = true
+serde.workspace = true
+sha2.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 

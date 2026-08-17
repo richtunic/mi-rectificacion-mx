@@ -11,7 +11,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.0-beta.1"
+version = "0.1.0-beta.2"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.85"
@@ -29,11 +29,11 @@ lopdf = "0.35"
 open = "5"
 rand = "0.9"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "native-tls"] }
-resvg = "0.45"
 rfd = "0.17"
 printpdf = { version = "0.8", default-features = false, features = ["png", "jpeg"] }
 rusqlite = { version = "0.37", features = ["bundled"] }
 rust_decimal = { version = "1", features = ["serde"] }
+semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

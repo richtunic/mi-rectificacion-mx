@@ -1,3 +1,5 @@
+mod updater;
+
 use base64::{Engine, engine::general_purpose::STANDARD};
 use chrono::{DateTime, Datelike, Local, NaiveDate, NaiveDateTime, Utc};
 use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
@@ -21,7 +23,12 @@ use mi_rectificacion_storage::{
     CaseDataStore, EvidenceVault, SqliteCaseRepository, TrackingUpdateResult,
 };
 use rust_decimal::Decimal;
-use std::{path::Path, str::FromStr, time::Duration};
+use std::{
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::Duration,
+};
+use updater::{AvailableUpdate, check_for_update, download_and_launch};
 use uuid::Uuid;
 
 const CSS: &str = include_str!("../../../assets/main.css");
@@ -216,6 +223,18 @@ fn App() -> Element {
     let mut case_search = use_signal(String::new);
     let mut new_case_step = use_signal(|| 0_usize);
     let mut form_error = use_signal(|| None::<String>);
+    let mut available_update = use_signal(|| None::<AvailableUpdate>);
+    let mut update_downloading = use_signal(|| false);
+    let mut update_error = use_signal(|| None::<String>);
+    let mut update_installer_opened = use_signal(|| None::<String>);
+
+    use_future(move || async move {
+        tokio::time::sleep(Duration::from_millis(1_200)).await;
+        let result = tokio::task::spawn_blocking(|| check_for_update(APP_VERSION)).await;
+        if let Ok(Ok(Some(update))) = result {
+            available_update.set(Some(update));
+        }
+    });
 
     use_future(move || async move {
         tokio::time::sleep(Duration::from_millis(750)).await;
@@ -245,6 +264,7 @@ fn App() -> Element {
     });
 
     let state_snapshot = app_state.read().clone();
+    let update_snapshot = available_update.read().clone();
     let wizard_step = *new_case_step.read();
     let selected_case = state_snapshot
         .selected_case_id
@@ -592,6 +612,10 @@ fn App() -> Element {
                                     form_error.set(Some(error));
                                     return;
                                 }
+                                if let Err(error) = validate_wizard_customs_form_number(&customs_form_number.read()) {
+                                    form_error.set(Some(error.to_owned()));
+                                    return;
+                                }
 
                                 let state = app_state.read();
                                 let Some(repository) = state.repository.as_ref() else {
@@ -750,10 +774,19 @@ fn App() -> Element {
                                             oninput: move |event| { tracking_number.set(event.value().to_ascii_uppercase()); form_error.set(None); },
                                         } small { "Debe contener exactamente 13 caracteres alfanuméricos." } }
                                         label { span { "Empresa postal" } input { value: "Correos de México", readonly: true } }
-                                        label { span { "Folio de boleta" } input {
-                                            value: "{customs_form_number}", placeholder: "Opcional por ahora",
-                                            oninput: move |event| customs_form_number.set(event.value()),
-                                        } }
+                                        label {
+                                            span { "Folio o número de boleta aduanal *" }
+                                            input {
+                                                value: "{customs_form_number}",
+                                                placeholder: "Ej. 123456",
+                                                required: true,
+                                                oninput: move |event| {
+                                                    customs_form_number.set(event.value());
+                                                    form_error.set(None);
+                                                },
+                                            }
+                                            small { "Obligatorio. Captura el folio impreso en la boleta." }
+                                        }
                                         label { class: "wide-field", span { "Nombre del expediente" } input {
                                             value: "{display_name}", placeholder: "Ej. Audífonos Japón",
                                             oninput: move |event| display_name.set(event.value()),
@@ -786,6 +819,93 @@ fn App() -> Element {
                                     }
                                     button { class: "primary-button", r#type: "submit", "Guardar y continuar" }
                                 }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(update) = update_snapshot {
+            div { class: "modal-backdrop update-modal-backdrop",
+                article { class: "update-dialog", onclick: move |event| event.stop_propagation(),
+                    div { class: "update-dialog-heading",
+                        div { class: "update-dialog-icon", "↻" }
+                        div {
+                            span { class: "eyebrow", "ACTUALIZACIÓN DISPONIBLE" }
+                            h3 { "{update.title}" }
+                            p { "Versión instalada {APP_VERSION} → versión {update.version}" }
+                        }
+                    }
+                    div { class: "update-release-notes",
+                        strong { "Cambios de esta versión" }
+                        pre { "{update.notes}" }
+                    }
+                    if let Some(message) = update_error.read().as_ref() {
+                        div { class: "alert error", "{message}" }
+                    }
+                    if let Some(message) = update_installer_opened.read().as_ref() {
+                        div { class: "alert success", "{message}" }
+                    }
+                    p { class: "update-security-note",
+                        "La descarga se obtiene de la Release oficial de GitHub y se verifica con SHA-256 antes de abrirla."
+                    }
+                    div { class: "update-dialog-actions",
+                        button {
+                            class: "text-button",
+                            disabled: *update_downloading.read(),
+                            onclick: move |_| {
+                                if !*update_downloading.read() {
+                                    available_update.set(None);
+                                    update_error.set(None);
+                                    update_installer_opened.set(None);
+                                }
+                            },
+                            if update_installer_opened.read().is_some() { "Cerrar" } else { "Ahora no" }
+                        }
+                        button {
+                            class: "secondary-button",
+                            disabled: *update_downloading.read(),
+                            onclick: {
+                                let release_url = update.release_url.clone();
+                                move |_| if let Err(error) = open::that(&release_url) {
+                                    update_error.set(Some(error.to_string()));
+                                }
+                            },
+                            "Ver en GitHub"
+                        }
+                        if update_installer_opened.read().is_none() {
+                            button {
+                                class: "primary-button",
+                                disabled: *update_downloading.read(),
+                                onclick: {
+                                    let update = update.clone();
+                                    move |_| {
+                                        if *update_downloading.read() {
+                                            return;
+                                        }
+                                        update_downloading.set(true);
+                                        update_error.set(None);
+                                        let update = update.clone();
+                                        spawn(async move {
+                                            let result = tokio::task::spawn_blocking(move || {
+                                                download_and_launch(&update)
+                                            })
+                                            .await
+                                            .map_err(|_| "La actualización terminó inesperadamente".to_owned())
+                                            .and_then(|result| result);
+                                            update_downloading.set(false);
+                                            match result {
+                                                Ok(path) => update_installer_opened.set(Some(format!(
+                                                    "Actualización descargada y verificada. Se abrió el instalador desde {}. Completa la instalación y reinicia la app.",
+                                                    path.display()
+                                                ))),
+                                                Err(message) => update_error.set(Some(message)),
+                                            }
+                                        });
+                                    }
+                                },
+                                if *update_downloading.read() { "Descargando y verificando…" } else { "Actualizar ahora" }
                             }
                         }
                     }
@@ -894,6 +1014,7 @@ fn FaqPage() -> Element {
                     }
                 }
             }
+
         }
     }
 }
@@ -925,6 +1046,14 @@ fn validate_wizard_tracking_number(tracking_number: &str) -> Result<(), String> 
     RectificationCase::new(tracking_number, None, None)
         .map(|_| ())
         .map_err(|error| error.to_string())
+}
+
+fn validate_wizard_customs_form_number(customs_form_number: &str) -> Result<(), &'static str> {
+    if customs_form_number.trim().is_empty() {
+        Err("Captura el folio o número de la boleta aduanal")
+    } else {
+        Ok(())
+    }
 }
 
 #[component]
@@ -1507,6 +1636,59 @@ struct EvidencePreview {
     data_url: String,
 }
 
+struct EvidenceImportSummary {
+    imported: usize,
+    errors: Vec<String>,
+}
+
+fn import_selected_evidence(
+    case_id: Uuid,
+    kind: EvidenceKind,
+    title: Option<String>,
+    paths: &[PathBuf],
+) -> Result<EvidenceImportSummary, String> {
+    let vault = EvidenceVault::open_default().map_err(|error| error.to_string())?;
+    let base_title = title
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty());
+    let multiple = paths.len() > 1;
+    let mut imported = 0;
+    let mut errors = Vec::new();
+
+    for (index, path) in paths.iter().enumerate() {
+        let document_title = if multiple {
+            base_title
+                .as_ref()
+                .map(|value| format!("{value} {}", index + 1))
+                .or_else(|| {
+                    path.file_stem()
+                        .and_then(|value| value.to_str())
+                        .map(str::to_owned)
+                })
+        } else {
+            base_title.clone()
+        };
+        match vault.import_evidence(case_id, kind, document_title, path) {
+            Ok(_) => imported += 1,
+            Err(error) => errors.push(format!(
+                "{}: {error}",
+                path.file_name()
+                    .and_then(|value| value.to_str())
+                    .unwrap_or("archivo")
+            )),
+        }
+    }
+
+    Ok(EvidenceImportSummary { imported, errors })
+}
+
+fn remove_selected_evidence(document: &EvidenceDocument) -> Result<(), String> {
+    EvidenceVault::open_default()
+        .map_err(|error| error.to_string())?
+        .remove_evidence(document)
+        .map_err(|error| error.to_string())
+}
+
 #[derive(Clone)]
 struct ProductPanelState {
     store: Option<CaseDataStore>,
@@ -1736,6 +1918,9 @@ fn export_case_document(
     destination: &Path,
 ) -> Result<std::path::PathBuf, String> {
     let store = CaseDataStore::open_default().map_err(|value| value.to_string())?;
+    let case = store
+        .load_case(case.id)
+        .map_err(|value| value.to_string())?;
     let products = store
         .list_products(case.id)
         .map_err(|value| value.to_string())?;
@@ -1779,15 +1964,15 @@ fn export_case_document(
         })
         .collect::<Result<Vec<_>, _>>()?;
     let exported = if format == "pdf" {
-        export_print_ready_pdf(case, &applicant, &products, &evidence, destination)
+        export_print_ready_pdf(&case, &applicant, &products, &evidence, destination)
     } else {
-        export_editable_docx(case, &applicant, &products, destination)
+        export_editable_docx(&case, &applicant, &products, destination)
     }
     .map_err(|value| value.to_string())?;
     let automatic_root = store
         .automatic_email_documents_root(case.id)
         .map_err(|value| value.to_string())?;
-    let bundle = generate_bundle(case, &applicant, &products, &evidence, &automatic_root)
+    let bundle = generate_bundle(&case, &applicant, &products, &evidence, &automatic_root)
         .map_err(|value| value.to_string())?;
     store
         .save_email_draft(&EmailDraft {
@@ -2534,6 +2719,7 @@ fn DocumentPanel(
     on_changed: EventHandler<()>,
 ) -> Element {
     let case_id = case.id;
+    let initial_customs_form_number = case.customs_form_number.clone().unwrap_or_default();
     let export_case = case.clone();
     let bundle_case = case.clone();
     let initial_customs_valuation = CaseDataStore::open_default()
@@ -2541,6 +2727,9 @@ fn DocumentPanel(
         .ok()
         .flatten()
         .map(|value| value.normalize().to_string())
+        .unwrap_or_default();
+    let initial_request_notes = CaseDataStore::open_default()
+        .and_then(|store| store.load_request_notes(case_id))
         .unwrap_or_default();
     let ApplicantProfile {
         full_name: profile_name,
@@ -2557,6 +2746,8 @@ fn DocumentPanel(
     let mut address = use_signal(move || profile_address);
     let mut authority_name = use_signal(|| "Autoridad aduanera competente".to_owned());
     let mut authority_email = use_signal(|| DEFAULT_CUSTOMS_EMAIL.to_owned());
+    let mut customs_form_number = use_signal(move || initial_customs_form_number);
+    let mut customs_form_save_status = use_signal(|| None::<Result<(), String>>);
     let mut presumptive_value_mxn = use_signal(move || initial_customs_valuation);
     let mut valuation_save_status = use_signal(|| None::<Result<(), String>>);
     let mut city = use_signal(move || profile_city);
@@ -2566,7 +2757,8 @@ fn DocumentPanel(
     let mut non_commercial_statement = use_signal(|| {
         "La mercancía corresponde a artículos en cantidad razonable para uso personal. No existe habitualidad, volumen comercial ni finalidad lucrativa.".to_owned()
     });
-    let mut request_notes = use_signal(String::new);
+    let mut request_notes = use_signal(move || initial_request_notes);
+    let mut request_notes_save_status = use_signal(|| None::<Result<(), String>>);
     let mut last_bundle = use_signal(|| None::<GeneratedBundle>);
     let mut show_export_dialog = use_signal(|| false);
     let mut export_format = use_signal(|| "pdf".to_owned());
@@ -2646,6 +2838,31 @@ fn DocumentPanel(
                         span { "Correo de la autoridad" }
                         input { r#type: "email", value: "{authority_email}", placeholder: "Confirma el destinatario oficial", oninput: move |event| authority_email.set(event.value()) }
                     }
+                    label { class: "wide-field",
+                        span { "Folio o número de boleta aduanal" }
+                        input {
+                            value: "{customs_form_number}",
+                            placeholder: "Captura el folio impreso en la boleta",
+                            oninput: move |event| {
+                                let value = event.value();
+                                customs_form_number.set(value.clone());
+                                let result = CaseDataStore::open_default()
+                                    .and_then(|store| store.save_customs_form_number(case_id, &value))
+                                    .map_err(|error| error.to_string());
+                                let saved = result.is_ok();
+                                customs_form_save_status.set(Some(result));
+                                if saved {
+                                    on_changed.call(());
+                                }
+                            }
+                        }
+                        small { "Este dato se mostrará en el escrito y en el expediente exportado." }
+                        if let Some(status) = customs_form_save_status.read().as_ref() {
+                            small { class: if status.is_ok() { "autosave-status saved" } else { "autosave-status error" },
+                                if let Err(message) = status { "No se pudo guardar: {message}" } else { "✓ Guardado automáticamente en este expediente" }
+                            }
+                        }
+                    }
                     label { class: "wide-field customs-valuation-field",
                         span { "Valuación incorrecta asignada por Aduanas (MXN)" }
                         input {
@@ -2722,8 +2939,24 @@ fn DocumentPanel(
                         textarea { value: "{non_commercial_statement}", oninput: move |event| non_commercial_statement.set(event.value()) }
                     }
                     label { class: "wide-field",
-                        span { "Notas para la solicitud" }
-                        textarea { value: "{request_notes}", placeholder: "Hechos relevantes o explicación adicional", oninput: move |event| request_notes.set(event.value()) }
+                        span { "Observaciones adicionales" }
+                        textarea {
+                            value: "{request_notes}",
+                            placeholder: "Hechos relevantes o explicación adicional",
+                            oninput: move |event| {
+                                let value = event.value();
+                                request_notes.set(value.clone());
+                                let result = CaseDataStore::open_default()
+                                    .and_then(|store| store.save_request_notes(case_id, &value))
+                                    .map_err(|error| error.to_string());
+                                request_notes_save_status.set(Some(result));
+                            }
+                        }
+                        if let Some(status) = request_notes_save_status.read().as_ref() {
+                            small { class: if status.is_ok() { "autosave-status saved" } else { "autosave-status error" },
+                                if let Err(message) = status { "No se pudo guardar: {message}" } else { "✓ Guardado automáticamente en este expediente" }
+                            }
+                        }
                     }
                 }
                 div { class: "document-actions",
@@ -3242,18 +3475,29 @@ fn CaptureEvidenceStep(
                     button {
                         class: "primary-button",
                         onclick: move |_| {
-                            let Some(path) = rfd::FileDialog::new()
+                            let Some(paths) = rfd::FileDialog::new()
                                 .add_filter("PDF e imágenes", &["pdf", "png", "jpg", "jpeg", "webp"])
-                                .pick_file() else { return; };
-                            let result = panel.read().vault.as_ref()
-                                .ok_or_else(|| "El almacén cifrado no está disponible".to_owned())
-                                .and_then(|vault| vault.import_evidence(case_id, kind, None, &path).map_err(|error| error.to_string()));
+                                .pick_files() else { return; };
+                            let result = import_selected_evidence(case_id, kind, None, &paths);
                             match result {
-                                Ok(_) => { panel.write().reload(case_id); on_changed.call(()); }
+                                Ok(summary) => {
+                                    if summary.imported > 0 {
+                                        panel.write().reload(case_id);
+                                        on_changed.call(());
+                                    }
+                                    if !summary.errors.is_empty() {
+                                        panel.write().error = Some(format!(
+                                            "Se agregaron {} de {} archivos. {}",
+                                            summary.imported,
+                                            paths.len(),
+                                            summary.errors.join(" · ")
+                                        ));
+                                    }
+                                }
                                 Err(error) => panel.write().error = Some(error),
                             }
                         },
-                        "+ Agregar PDF o imagen"
+                        "+ Agregar PDF o imágenes"
                     }
                 }
             } else {
@@ -3276,18 +3520,29 @@ fn CaptureEvidenceStep(
                     button {
                         class: "add-product-fields-button",
                         onclick: move |_| {
-                            let Some(path) = rfd::FileDialog::new()
+                            let Some(paths) = rfd::FileDialog::new()
                                 .add_filter("PDF e imágenes", &["pdf", "png", "jpg", "jpeg", "webp"])
-                                .pick_file() else { return; };
-                            let result = panel.read().vault.as_ref()
-                                .ok_or_else(|| "El almacén cifrado no está disponible".to_owned())
-                                .and_then(|vault| vault.import_evidence(case_id, kind, None, &path).map_err(|error| error.to_string()));
+                                .pick_files() else { return; };
+                            let result = import_selected_evidence(case_id, kind, None, &paths);
                             match result {
-                                Ok(_) => { panel.write().reload(case_id); on_changed.call(()); }
+                                Ok(summary) => {
+                                    if summary.imported > 0 {
+                                        panel.write().reload(case_id);
+                                        on_changed.call(());
+                                    }
+                                    if !summary.errors.is_empty() {
+                                        panel.write().error = Some(format!(
+                                            "Se agregaron {} de {} archivos. {}",
+                                            summary.imported,
+                                            paths.len(),
+                                            summary.errors.join(" · ")
+                                        ));
+                                    }
+                                }
                                 Err(error) => panel.write().error = Some(error),
                             }
                         },
-                        "+ Agregar otro PDF o imagen"
+                        "+ Agregar más PDF o imágenes"
                     }
                 }
             }
@@ -3298,11 +3553,15 @@ fn CaptureEvidenceStep(
                     div {
                         button { class: "text-button", onclick: move |_| pending_removal.set(None), "Cancelar" }
                         button { class: "danger-button", onclick: move |_| {
-                            let result = panel.read().vault.as_ref()
-                                .ok_or_else(|| "El almacén cifrado no está disponible".to_owned())
-                                .and_then(|vault| vault.remove_evidence(&document).map_err(|error| error.to_string()));
-                            match result {
-                                Ok(()) => { pending_removal.set(None); panel.write().reload(case_id); on_changed.call(()); }
+                            match remove_selected_evidence(&document) {
+                                Ok(()) => {
+                                    pending_removal.set(None);
+                                    {
+                                        let mut panel_state = panel.write();
+                                        panel_state.reload(case_id);
+                                    }
+                                    on_changed.call(());
+                                }
                                 Err(error) => panel.write().error = Some(error),
                             }
                         }, "Eliminar" }
@@ -3614,9 +3873,9 @@ fn CaseDetail(
                         class: "primary-button attach-button",
                         onclick: move |_| {
                             notice.set(None);
-                            let Some(path) = rfd::FileDialog::new()
+                            let Some(paths) = rfd::FileDialog::new()
                                 .add_filter("PDF e imágenes", &["pdf", "png", "jpg", "jpeg", "webp"])
-                                .pick_file()
+                                .pick_files()
                             else {
                                 return;
                             };
@@ -3628,22 +3887,30 @@ fn CaseDetail(
                                 }
                             };
                             let title = Some(evidence_title.read().clone());
-                            let result = panel
-                                .read()
-                                .vault
-                                .as_ref()
-                                .ok_or_else(|| "El almacén cifrado no está disponible".to_owned())
-                                .and_then(|vault| vault.import_evidence(case_id, kind, title, &path).map_err(|error| error.to_string()));
+                            let result = import_selected_evidence(case_id, kind, title, &paths);
                             match result {
-                                Ok(document) => {
-                                    evidence_title.set(String::new());
-                                    notice.set(Some(format!("{} se cifró y agregó al expediente", document.original_filename)));
-                                    panel.write().reload(case_id);
+                                Ok(summary) => {
+                                    if summary.imported > 0 {
+                                        evidence_title.set(String::new());
+                                        notice.set(Some(format!(
+                                            "{} archivo(s) se cifraron y agregaron al expediente",
+                                            summary.imported
+                                        )));
+                                        panel.write().reload(case_id);
+                                    }
+                                    if !summary.errors.is_empty() {
+                                        panel.write().error = Some(format!(
+                                            "Se agregaron {} de {} archivos. {}",
+                                            summary.imported,
+                                            paths.len(),
+                                            summary.errors.join(" · ")
+                                        ));
+                                    }
                                 }
                                 Err(error) => panel.write().error = Some(error),
                             }
                         },
-                        "+ Adjuntar archivo"
+                        "+ Adjuntar archivos"
                     }
                 }
 
@@ -3658,18 +3925,15 @@ fn CaseDetail(
                             button {
                                 class: "danger-button",
                                 onclick: move |_| {
-                                    let result = panel
-                                        .read()
-                                        .vault
-                                        .as_ref()
-                                        .ok_or_else(|| "El almacén cifrado no está disponible".to_owned())
-                                        .and_then(|vault| vault.remove_evidence(&document).map_err(|error| error.to_string()));
-                                    match result {
+                                    match remove_selected_evidence(&document) {
                                         Ok(()) => {
                                             pending_removal.set(None);
                                             preview.set(None);
                                             notice.set(Some("Evidencia retirada correctamente".to_owned()));
-                                            panel.write().reload(case_id);
+                                            {
+                                                let mut panel_state = panel.write();
+                                                panel_state.reload(case_id);
+                                            }
                                         }
                                         Err(error) => panel.write().error = Some(error),
                                     }
@@ -3706,11 +3970,14 @@ fn CaseDetail(
                                                     .and_then(|vault| vault.load_evidence_bytes(&preview_document).map_err(|error| error.to_string()));
                                                 match result {
                                                     Ok(bytes) => {
-                                                        let data_url = format!(
+                                                        let mut data_url = format!(
                                                             "data:{};base64,{}",
                                                             preview_document.content_type,
                                                             STANDARD.encode(bytes)
                                                         );
+                                                        if !preview_document.is_image() {
+                                                            data_url.push_str("#view=Fit");
+                                                        }
                                                         preview.set(Some(EvidencePreview {
                                                             document: preview_document.clone(),
                                                             data_url,
@@ -3762,7 +4029,8 @@ fn CaseDetail(
                             }
                         }
 
-                        aside { class: "preview-panel",
+                        aside {
+                            class: if preview.read().as_ref().is_some_and(|current| !current.document.is_image()) { "preview-panel pdf-preview-panel" } else { "preview-panel" },
                             if let Some(current) = preview.read().as_ref() {
                                 div { class: "preview-heading",
                                     strong { "{current.document.title}" }
@@ -3883,6 +4151,15 @@ mod tests {
     fn new_case_wizard_validates_the_tracking_number_before_advancing() {
         assert!(validate_wizard_tracking_number("ZZ000000000ZZ").is_ok());
         assert!(validate_wizard_tracking_number("GUIA-CORTA").is_err());
+    }
+
+    #[test]
+    fn new_case_wizard_requires_the_customs_form_number() {
+        assert_eq!(
+            validate_wizard_customs_form_number("   "),
+            Err("Captura el folio o número de la boleta aduanal")
+        );
+        assert!(validate_wizard_customs_form_number("BOLETA 12345").is_ok());
     }
 
     #[test]
