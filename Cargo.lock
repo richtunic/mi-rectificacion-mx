@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "desktop"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -3508,7 +3508,7 @@ dependencies = [
 
 [[package]]
 name = "mi-rectificacion-application"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 dependencies = [
  "mi-rectificacion-domain",
  "thiserror 2.0.20",
@@ -3517,7 +3517,7 @@ dependencies = [
 
 [[package]]
 name = "mi-rectificacion-documents"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 dependencies = [
  "anyhow",
  "base64",
@@ -3537,7 +3537,7 @@ dependencies = [
 
 [[package]]
 name = "mi-rectificacion-domain"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 dependencies = [
  "chrono",
  "rust_decimal",
@@ -3548,7 +3548,7 @@ dependencies = [
 
 [[package]]
 name = "mi-rectificacion-integrations"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 dependencies = [
  "chrono",
  "mi-rectificacion-domain",
@@ -3560,7 +3560,7 @@ dependencies = [
 
 [[package]]
 name = "mi-rectificacion-security"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 dependencies = [
  "aes-gcm",
  "base64",
@@ -3572,7 +3572,7 @@ dependencies = [
 
 [[package]]
 name = "mi-rectificacion-storage"
-version = "0.1.0-beta.2"
+version = "0.1.0-beta.3"
 dependencies = [
  "anyhow",
  "chrono",

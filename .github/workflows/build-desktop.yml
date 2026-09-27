@@ -13,11 +13,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          - label: macOS (Apple Silicon)
+            os: macos-15
+            platform: macos
+            package_type: dmg
+            artifact: mi-rectificacion-mx-macos-aarch64
+            arch: aarch64
+            dx_asset: dx-aarch64-apple-darwin.zip
+            dx_sha256: 4aff37aea6b8fbce7bee3f8bbbea1bd71f60e0fa09537f35759f6494da861e37
           - label: macOS (Intel)
             os: macos-15-intel
             platform: macos
             package_type: dmg
             artifact: mi-rectificacion-mx-macos-x86_64
+            arch: x86_64
             dx_asset: dx-x86_64-apple-darwin.zip
             dx_sha256: b2751a700b8b02f85fcdd8fe6e63c20876b4af9f0921c5be4c703e6f872b67ee
           - label: Windows (64 bits)
@@ -90,7 +99,28 @@ jobs:
       - name: Comprobar Dioxus CLI
         run: dx --version
 
-      - name: Crear paquete nativo
+      - name: Crear y firmar paquete nativo de macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          ARTIFACT_DIR: dist/${{ matrix.artifact }}
+          MAC_ARCH: ${{ matrix.arch }}
+        run: |
+          dx bundle --release --package desktop --platform macos --package-types macos --out-dir "$ARTIFACT_DIR" --locked
+          app_path="$ARTIFACT_DIR/Mi Rectificación MX.app"
+          test -d "$app_path"
+          codesign --force --deep --sign - "$app_path"
+          codesign --verify --deep --strict --verbose=4 "$app_path"
+          version="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "desktop") | .version')"
+          test -n "$version"
+          staging="$RUNNER_TEMP/mi-rectificacion-dmg"
+          mkdir -p "$staging"
+          ditto "$app_path" "$staging/Mi Rectificación MX.app"
+          ln -s /Applications "$staging/Applications"
+          hdiutil create -volname "Mi Rectificación MX" -srcfolder "$staging" -ov -format UDZO "$ARTIFACT_DIR/Mi.Rectificacion.MX_${version}_${MAC_ARCH}.dmg"
+
+      - name: Crear paquete nativo de Windows o Linux
+        if: runner.os != 'macOS'
         run: dx bundle --release --package desktop --platform ${{ matrix.platform }} --package-types ${{ matrix.package_type }} --out-dir dist/${{ matrix.artifact }} --locked
 
       - name: Publicar artefacto

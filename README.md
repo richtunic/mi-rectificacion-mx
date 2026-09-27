@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <img alt="Versión" src="https://img.shields.io/badge/versi%C3%B3n-0.1.0--beta.1-E91E78">
+  <img alt="Versión" src="https://img.shields.io/badge/versi%C3%B3n-0.1.0--beta.3-E91E78">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.85%2B-0B1B4D?logo=rust&logoColor=white">
   <img alt="Dioxus" src="https://img.shields.io/badge/Dioxus-0.7-00A8E8?logo=rust&logoColor=white">
   <img alt="Plataformas" src="https://img.shields.io/badge/escritorio-macOS%20%7C%20Windows%20%7C%20Linux-00A86B">
@@ -153,9 +153,9 @@ cargo test --workspace
 
 ## Estado del proyecto
 
-`0.1.0-beta.2` es una versión beta funcional. Antes de considerarla estable faltan, entre otras tareas:
+`0.1.0-beta.3` es una versión beta funcional. Antes de considerarla estable faltan, entre otras tareas:
 
-- validación de empaquetado y firma en macOS, Windows y Linux;
+- firma con certificado Apple Developer y notarización de macOS;
 - pruebas con más formatos reales anonimizados de boleta;
 - revisión jurídica independiente de referencias y plantillas;
 - manejo visual del flujo de correo, actualmente oculto;
