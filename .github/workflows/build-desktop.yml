@@ -52,6 +52,8 @@ jobs:
 
       - name: Preparar Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.96.0
 
       - name: Restaurar caché de Rust
         uses: Swatinem/rust-cache@v2
