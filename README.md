@@ -9,6 +9,10 @@
 </p>
 
 <p align="center">
+  <a href="https://richtunic.github.io/mi-rectificacion-mx/">Sitio oficial y descargas</a>
+</p>
+
+<p align="center">
   <img alt="Versión" src="https://img.shields.io/badge/versi%C3%B3n-0.1.0--beta.3-E91E78">
   <img alt="Rust" src="https://img.shields.io/badge/Rust-1.85%2B-0B1B4D?logo=rust&logoColor=white">
   <img alt="Dioxus" src="https://img.shields.io/badge/Dioxus-0.7-00A8E8?logo=rust&logoColor=white">
