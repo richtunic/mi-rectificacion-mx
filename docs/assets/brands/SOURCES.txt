@@ -1,2 +1,3 @@
 Apple and Linux SVGs: Simple Icons v16 (CC0-1.0), https://simpleicons.org/
+Discord SVG: Simple Icons (CC0-1.0), https://github.com/simple-icons/simple-icons/blob/develop/icons/discord.svg
 Windows SVG: four-pane vector created for this site.

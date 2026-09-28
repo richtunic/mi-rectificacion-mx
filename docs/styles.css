@@ -109,6 +109,10 @@ h1 em{color:var(--pink)}
 .sponsor-repo-link:hover{color:#ad175a}
 .sponsor-note{color:#858b9a;font-size:12px;margin:21px 0 0}
 .site-footer{background:#fff}
+.button-discord{background:#5865f2;color:#fff;white-space:nowrap}
+.button-discord:hover{background:#4752c4}
+.button-discord img{flex:none;filter:brightness(0) invert(1)}
+.community-actions .button{justify-content:center}
 
 @media(max-width:760px){
   .container{width:min(100% - 36px,560px)}

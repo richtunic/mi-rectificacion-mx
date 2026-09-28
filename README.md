@@ -10,6 +10,8 @@
 
 <p align="center">
   <a href="https://mirectificacionmx.pages.dev/">🌐 Página oficial de Mi Rectificación MX · Información y descargas</a>
+  <br>
+  <a href="https://discord.gg/2ARzTYkyu"><img src="docs/assets/brands/discord.svg" alt="" width="20" height="20"> Discord oficial · Noticias, ayuda y comunidad</a>
 </p>
 
 <p align="center">
@@ -169,7 +171,7 @@ Consulta [PLAN.md](PLAN.md) para conocer el alcance y las decisiones de diseño.
 
 ## Colaborar
 
-Los reportes de errores y propuestas son bienvenidos mediante Issues. No adjuntes información personal ni documentación aduanal real: usa datos completamente anonimizados o sintéticos.
+Puedes unirte al [Discord oficial](https://discord.gg/2ARzTYkyu) para leer noticias, resolver dudas y compartir ideas. Los reportes de errores y propuestas también son bienvenidos mediante Issues. No adjuntes información personal ni documentación aduanal real: usa datos completamente anonimizados o sintéticos.
 
 ## Licencia
 
