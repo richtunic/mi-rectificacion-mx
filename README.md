@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://richtunic.github.io/mi-rectificacion-mx/">Sitio oficial y descargas</a>
+  <a href="https://mirectificacionmx.pages.dev/">Sitio oficial y descargas</a>
 </p>
 
 <p align="center">
