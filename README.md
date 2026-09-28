@@ -9,7 +9,7 @@
 </p>
 
 <p align="center">
-  <a href="https://mirectificacionmx.pages.dev/">Sitio oficial y descargas</a>
+  <a href="https://mirectificacionmx.pages.dev/">🌐 Página oficial de Mi Rectificación MX · Información y descargas</a>
 </p>
 
 <p align="center">
